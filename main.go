@@ -157,12 +157,17 @@ func setApartmentsAsUnavailable(urls []string) {
 func saveApartment(apartment dto.Apartment) {
 	db := dbConn()
 
+	//query := "INSERT INTO apartments (url, title, description, price_eur, price_usd, price_leu, price_square_meter_eur, " +
+	//	"location, last_updated, page_views, seller_login, seller_phone, image_urls) " +
+	//	"VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) " +
+	//	"ON CONFLICT (url) " +
+	//	"DO UPDATE SET title = $14, description = $15, price_eur = $16, price_usd = $17, price_leu = $18, price_square_meter_eur = $19, " +
+	//	"location = $20, last_updated = $21, page_views = $22, seller_login = $23, seller_phone = $24, image_urls = $25, updated_at = CURRENT_TIMESTAMP"
+
 	query := "INSERT INTO apartments (url, title, description, price_eur, price_usd, price_leu, price_square_meter_eur, " +
 		"location, last_updated, page_views, seller_login, seller_phone, image_urls) " +
-		"VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) " +
-		"ON CONFLICT (url) " +
-		"DO UPDATE SET title = $14, description = $15, price_eur = $16, price_usd = $17, price_leu = $18, price_square_meter_eur = $19, " +
-		"location = $20, last_updated = $21, page_views = $22, seller_login = $23, seller_phone = $24, image_urls = $25, updated_at = CURRENT_TIMESTAMP"
+		"VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) "
+
 	stmt, err := db.Prepare(query)
 	if err != nil {
 		panic(err)
@@ -172,18 +177,6 @@ func saveApartment(apartment dto.Apartment) {
 
 	_, err = stmt.Exec(
 		apartment.URL,
-		apartment.Title,
-		apartment.Desc,
-		apartment.PriceEur,
-		apartment.PriceUsd,
-		apartment.PriceLeu,
-		apartment.PriceSquareMeterEur,
-		apartment.Location,
-		apartment.LastUpdated,
-		apartment.PageViews,
-		apartment.SellerLogin,
-		apartment.SellerPhone,
-		string(imageUrls),
 		apartment.Title,
 		apartment.Desc,
 		apartment.PriceEur,
