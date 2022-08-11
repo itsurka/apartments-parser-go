@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/ioutil"
 	"itsurka/go-web-parser/internal/dto"
+	"itsurka/go-web-parser/internal/helpers/dbhelper"
 	"itsurka/go-web-parser/internal/helpers/parser"
 	"net/http"
 	"net/url"
@@ -24,6 +25,16 @@ import (
 )
 
 func main() {
+	dbConfig := dbhelper.DbConfig{
+		"postgres",
+		"localhost",
+		5432,
+		"test",
+		"test",
+		"go_web_parser",
+	}
+	db := dbhelper.GetConnection(dbConfig)
+
 	favoritesPage, err := getPage("https://999.md/cabinet/favorites?&subcategory_url=real-estate/apartments-and-rooms")
 	if err != nil {
 		panic(err)
@@ -31,7 +42,7 @@ func main() {
 
 	apartmentLinks, unavailableApartmentLinks := getApartmentLinks(favoritesPage)
 
-	setApartmentsAsUnavailable(unavailableApartmentLinks)
+	setApartmentsAsUnavailable(db, unavailableApartmentLinks)
 
 	for _, link := range apartmentLinks {
 		data, err := getPage(link)
@@ -40,7 +51,7 @@ func main() {
 		}
 
 		apartment := parseApartment(link, data)
-		saveApartment(apartment)
+		saveApartment(db, apartment)
 	}
 }
 
@@ -137,7 +148,7 @@ func parseApartment(pageUrl string, pageData []byte) dto.Apartment {
 	return apartment
 }
 
-func setApartmentsAsUnavailable(urls []string) {
+func setApartmentsAsUnavailable(db *sql.DB, urls []string) {
 	if len(urls) == 0 {
 		return
 	}
@@ -148,15 +159,13 @@ func setApartmentsAsUnavailable(urls []string) {
 	}
 	urlStrRow := strings.Join(urlStr, ",")
 
-	_, err := dbConn().Exec("UPDATE apartments SET unavailable_from = CURRENT_TIMESTAMP WHERE url IN (" + urlStrRow + ")")
+	_, err := db.Exec("UPDATE apartments SET unavailable_from = CURRENT_TIMESTAMP WHERE url IN (" + urlStrRow + ")")
 	if err != nil {
 		panic(err)
 	}
 }
 
-func saveApartment(apartment dto.Apartment) {
-	db := dbConn()
-
+func saveApartment(db *sql.DB, apartment dto.Apartment) {
 	//query := "INSERT INTO apartments (url, title, description, price_eur, price_usd, price_leu, price_square_meter_eur, " +
 	//	"location, last_updated, page_views, seller_login, seller_phone, image_urls) " +
 	//	"VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) " +
@@ -195,25 +204,25 @@ func saveApartment(apartment dto.Apartment) {
 	}
 }
 
-func dbConn() (db *sql.DB) {
-	dbDriver := "postgres"
-	dbHost := "localhost"
-	dbPort := 5432
-	dbUser := "test"
-	dbPass := "test"
-	dbName := "go_web_parser"
-
-	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
-		"password=%s dbname=%s sslmode=disable",
-		dbHost, dbPort, dbUser, dbPass, dbName)
-
-	db, err := sql.Open(dbDriver, psqlInfo)
-	if err != nil {
-		panic(err)
-	}
-
-	return db
-}
+//func dbConn() (db *sql.DB) {
+//	dbDriver := "postgres"
+//	dbHost := "localhost"
+//	dbPort := 5432
+//	dbUser := "test"
+//	dbPass := "test"
+//	dbName := "go_web_parser"
+//
+//	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
+//		"password=%s dbname=%s sslmode=disable",
+//		dbHost, dbPort, dbUser, dbPass, dbName)
+//
+//	db, err := sql.Open(dbDriver, psqlInfo)
+//	if err != nil {
+//		panic(err)
+//	}
+//
+//	return db
+//}
 
 func getApartmentLinks(data []byte) ([]string, []string) {
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(data))
