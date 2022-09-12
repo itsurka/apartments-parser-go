@@ -1,0 +1,62 @@
+version: "3.9"
+services:
+  parser:
+    container_name: 'apartments_parser'
+    build:
+      dockerfile: Dockerfile
+      context: .
+    volumes:
+      - .:/app
+#    ports:
+#      - "8001:8080"
+    networks:
+      - apartments
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    links:
+      - "postgres:database"
+      - "rabbitmq:mq"
+  postgres:
+    image: postgres:14-alpine
+    container_name: 'apartments_postgres'
+    healthcheck:
+      test: [ "CMD-SHELL", "sh -c 'pg_isready -U ${DB_USER} -d ${DB_NAME}'" ]
+      interval: 2s
+      timeout: 3s
+      retries: 3
+    env_file:
+      - .env
+    ports:
+      - '5432:5432'
+    networks:
+      - apartments
+    volumes:
+      - ./pg_data:/var/lib/postgresql/data
+  rabbitmq:
+    image: rabbitmq:3.10-management-alpine
+    container_name: 'apartments_rabbitmq'
+    healthcheck:
+      test: rabbitmq-diagnostics check_port_connectivity
+      interval: 1s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - ./rabbitmq_data/data/:/var/lib/rabbitmq/
+      - ./rabbitmq_data/rabbitmq/log/:/var/log/rabbitmq
+    networks:
+      - apartments
+
+volumes:
+  pg_data:
+  rabbitmq_data:
+
+networks:
+  apartments:
+    name: apartments_network
+    driver: bridge

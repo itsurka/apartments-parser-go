@@ -4,35 +4,137 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	json2 "encoding/json"
 	"errors"
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
 	"github.com/goodsign/monday"
+	"github.com/joho/godotenv"
+	"github.com/streadway/amqp"
 	"io"
 	"io/ioutil"
 	"itsurka/go-web-parser/internal/dto"
 	"itsurka/go-web-parser/internal/helpers/dbhelper"
+	eh "itsurka/go-web-parser/internal/helpers/errhelper"
 	"itsurka/go-web-parser/internal/helpers/parser"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/lib/pq"
 )
 
 func main() {
-	dbConfig := dbhelper.DbConfig{
-		"postgres",
-		"localhost",
-		5432,
-		"test",
-		"test",
-		"go_web_parser",
+	//testGoruotines()
+	readAmqp()
+	//importApartments()
+}
+
+func testGoruotines() {
+	var waitGroup sync.WaitGroup
+	fmt.Printf("%#v/n", waitGroup)
+
+	for i := 1; i <= 3; i++ {
+		waitGroup.Add(1)
+		go func(x int) {
+			defer waitGroup.Done()
+			fmt.Printf("#%d ", x)
+		}(i)
 	}
+
+	fmt.Printf("#%#v\n", waitGroup)
+	waitGroup.Wait()
+	fmt.Println("\nexiting...")
+}
+
+func readAmqp() {
+	log.Println("Read messages...")
+
+	conn, err := amqp.Dial("amqp://guest:guest@rabbitmq:5672/")
+	eh.FailOnError(err)
+	defer conn.Close()
+
+	ch, err := conn.Channel()
+	eh.FailOnError(err)
+
+	q, err := ch.QueueDeclare(
+		"events",
+		false,
+		false,
+		false,
+		false,
+		nil,
+	)
+	eh.FailOnError(err)
+
+	messages, err := ch.Consume(
+		q.Name,
+		"",
+		true,
+		false,
+		false,
+		false,
+		nil,
+	)
+	eh.FailOnError(err)
+
+	forever := make(chan bool)
+
+	go func() {
+		for delivery := range messages {
+			log.Printf("Received a message: %s\n", delivery.Body)
+			handleMessage(delivery)
+		}
+	}()
+
+	log.Printf(" [*] Waiting for messages. To exit press CTRL+C")
+	<-forever
+}
+
+type Message struct {
+	Version string
+	Event   string
+	Data    interface{}
+}
+
+func handleMessage(delivery amqp.Delivery) {
+	var message Message
+	err := json2.Unmarshal(delivery.Body, &message)
+	eh.FailOnError(err)
+
+	switch message.Version {
+	case "1":
+		switch message.Event {
+		case "api.apartments.import":
+			importApartments()
+		default:
+			log.Panicln("Unknown message event", message)
+		}
+
+	default:
+		log.Panicln("Unknown message event", message)
+	}
+}
+
+func importApartments() {
+	fmt.Println("Start importing apartments...")
+	err := godotenv.Load(".env")
+
+	dbConfig := dbhelper.DbConfig{
+		os.Getenv("DB_DRIVER"),
+		os.Getenv("DB_HOST"),
+		os.Getenv("DB_PORT"),
+		os.Getenv("DB_USER"),
+		os.Getenv("DB_PASSWORD"),
+		os.Getenv("DB_NAME"),
+	}
+
 	db := dbhelper.GetConnection(dbConfig)
 
 	favoritesPage, err := getPage("https://999.md/cabinet/favorites?&subcategory_url=real-estate/apartments-and-rooms")
@@ -53,6 +155,8 @@ func main() {
 		apartment := parseApartment(link, data)
 		saveApartment(db, apartment)
 	}
+
+	fmt.Println("done, imported items", len(apartmentLinks))
 }
 
 func parseApartment(pageUrl string, pageData []byte) dto.Apartment {
@@ -111,6 +215,7 @@ func parseApartment(pageUrl string, pageData []byte) dto.Apartment {
 		dateText := updateDateNode.Text()
 		updateDatePrefix := "Дата обновления: "
 		datePart := dateText[len(updateDatePrefix):]
+		datePart = strings.Replace(datePart, "сент.", "сен.", 1)
 		loc, err := time.LoadLocation("Europe/Moscow")
 		if err != nil {
 			panic(err)
@@ -203,26 +308,6 @@ func saveApartment(db *sql.DB, apartment dto.Apartment) {
 		panic(err)
 	}
 }
-
-//func dbConn() (db *sql.DB) {
-//	dbDriver := "postgres"
-//	dbHost := "localhost"
-//	dbPort := 5432
-//	dbUser := "test"
-//	dbPass := "test"
-//	dbName := "go_web_parser"
-//
-//	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
-//		"password=%s dbname=%s sslmode=disable",
-//		dbHost, dbPort, dbUser, dbPass, dbName)
-//
-//	db, err := sql.Open(dbDriver, psqlInfo)
-//	if err != nil {
-//		panic(err)
-//	}
-//
-//	return db
-//}
 
 func getApartmentLinks(data []byte) ([]string, []string) {
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(data))
