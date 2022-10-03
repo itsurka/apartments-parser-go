@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	json2 "encoding/json"
+	"errhlp"
 	"errors"
-	"fmt"
 	"github.com/PuerkitoBio/goquery"
 	"github.com/goodsign/monday"
 	"github.com/joho/godotenv"
@@ -15,8 +15,8 @@ import (
 	"io/ioutil"
 	"itsurka/go-web-parser/internal/dto"
 	"itsurka/go-web-parser/internal/helpers/dbhelper"
-	eh "itsurka/go-web-parser/internal/helpers/errhelper"
 	"itsurka/go-web-parser/internal/helpers/parser"
+	"itsurka/go-web-parser/internal/helpers/qhelper"
 	"log"
 	"net/http"
 	"net/url"
@@ -24,65 +24,35 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	_ "github.com/lib/pq"
 )
 
+var queue *qhelper.Queue
+
+// Optional parameter "go run main.go i" - run only import of apartments
 func main() {
-	//testGoruotines()
-	readAmqp()
-	//importApartments()
-}
+	runImport := len(os.Args) == 2 && os.Args[1] == "i"
 
-func testGoruotines() {
-	var waitGroup sync.WaitGroup
-	fmt.Printf("%#v/n", waitGroup)
-
-	for i := 1; i <= 3; i++ {
-		waitGroup.Add(1)
-		go func(x int) {
-			defer waitGroup.Done()
-			fmt.Printf("#%d ", x)
-		}(i)
+	initEnvVars()
+	if !runImport {
+		readApartmentsPendingMessages()
+	} else {
+		importApartments()
 	}
-
-	fmt.Printf("#%#v\n", waitGroup)
-	waitGroup.Wait()
-	fmt.Println("\nexiting...")
 }
 
-func readAmqp() {
+func initEnvVars() {
+	err := godotenv.Load(".env")
+	errhlp.Fatal(err)
+}
+
+func readApartmentsPendingMessages() {
 	log.Println("Read messages...")
 
-	conn, err := amqp.Dial("amqp://guest:guest@rabbitmq:5672/")
-	eh.FailOnError(err)
-	defer conn.Close()
-
-	ch, err := conn.Channel()
-	eh.FailOnError(err)
-
-	q, err := ch.QueueDeclare(
-		"events",
-		false,
-		false,
-		false,
-		false,
-		nil,
-	)
-	eh.FailOnError(err)
-
-	messages, err := ch.Consume(
-		q.Name,
-		"",
-		true,
-		false,
-		false,
-		false,
-		nil,
-	)
-	eh.FailOnError(err)
+	queue := getQueue()
+	messages := queue.Consume("apartments.pending")
 
 	forever := make(chan bool)
 
@@ -97,24 +67,51 @@ func readAmqp() {
 	<-forever
 }
 
-type Message struct {
-	Version string
-	Event   string
-	Data    interface{}
+func getQueue() *qhelper.Queue {
+	if queue != nil {
+		return queue
+	}
+
+	queue := &qhelper.Queue{
+		ConnString: os.Getenv("RABBITMQ_URL"),
+	}
+
+	return queue
 }
 
 func handleMessage(delivery amqp.Delivery) {
-	var message Message
+	var message dto.QueueMessage
 	err := json2.Unmarshal(delivery.Body, &message)
-	eh.FailOnError(err)
+	errhlp.Fatal(err)
+
+	log.Println("handle message", message)
 
 	switch message.Version {
 	case "1":
 		switch message.Event {
 		case "api.apartments.import":
 			importApartments()
+
+			getQueue().Publish("apartments.done", dto.QueueMessage{
+				Version: "1",
+				Event:   "api.apartments.import.done",
+			})
+
+			log.Println("Published new message")
+
+		case "api.apartments.import.test":
+
+			time.Sleep(10 * time.Second)
+
+			getQueue().Publish("apartments.done", dto.QueueMessage{
+				Version: "1",
+				Event:   "api.apartments.test_import.done",
+			})
+
+			log.Println("Published new message")
+
 		default:
-			log.Panicln("Unknown message event", message)
+			log.Println("Unknown message event", message)
 		}
 
 	default:
@@ -123,8 +120,9 @@ func handleMessage(delivery amqp.Delivery) {
 }
 
 func importApartments() {
-	fmt.Println("Start importing apartments...")
+	log.Println("Start importing apartments...")
 	err := godotenv.Load(".env")
+	errhlp.Fatal(err)
 
 	dbConfig := dbhelper.DbConfig{
 		os.Getenv("DB_DRIVER"),
@@ -137,34 +135,60 @@ func importApartments() {
 
 	db := dbhelper.GetConnection(dbConfig)
 
-	favoritesPage, err := getPage("https://999.md/cabinet/favorites?&subcategory_url=real-estate/apartments-and-rooms")
-	if err != nil {
-		panic(err)
-	}
-
-	apartmentLinks, unavailableApartmentLinks := getApartmentLinks(favoritesPage)
-
-	setApartmentsAsUnavailable(db, unavailableApartmentLinks)
-
-	for _, link := range apartmentLinks {
-		data, err := getPage(link)
-		if err != nil {
-			panic(err)
+	var imported uint
+	nextPageUrl := "https://999.md/cabinet/favorites?&subcategory_url=real-estate/apartments-and-rooms"
+	for {
+		if nextPageUrl == "" {
+			break
 		}
 
-		apartment := parseApartment(link, data)
-		saveApartment(db, apartment)
+		html, err := getPageHtml(nextPageUrl)
+		errhlp.Fatal(err)
+
+		apartmentLinks, unavailableApartmentLinks, pageUrl := parseFavoritesPage(html)
+
+		setApartmentsAsUnavailable(db, unavailableApartmentLinks)
+		unavailableApartmentLinks = []string{}
+
+		for _, link := range apartmentLinks {
+			data, err := getPageHtml(link)
+			errhlp.Fatal(err)
+
+			apartment := parseApartment(link, data)
+
+			if apartment.Available {
+				saveApartment(db, apartment)
+				imported++
+			} else {
+				unavailableApartmentLinks = append(unavailableApartmentLinks, link)
+			}
+		}
+
+		if len(unavailableApartmentLinks) > 0 {
+			setApartmentsAsUnavailable(db, unavailableApartmentLinks)
+			unavailableApartmentLinks = []string{}
+		}
+
+		nextPageUrl = pageUrl
 	}
 
-	fmt.Println("done, imported items", len(apartmentLinks))
+	log.Println("done, imported items", imported)
 }
 
 func parseApartment(pageUrl string, pageData []byte) dto.Apartment {
 	apartment := dto.Apartment{
-		URL: pageUrl,
+		URL:       pageUrl,
+		Available: true,
 	}
 
 	doc := parser.ParsePageData(pageData)
+
+	if doc.Find(".adPage__archive-alert").Length() == 1 {
+		apartment.Available = false
+
+		return apartment
+	}
+
 	apartment.Title = doc.Find("header h1").Text()
 	apartment.Desc = doc.Find(".adPage__content__description").Text()
 	apartment.Desc = doc.Find(".adPage__content__description").Text()
@@ -239,9 +263,7 @@ func parseApartment(pageUrl string, pageData []byte) dto.Apartment {
 	pricePerSqMeter, _ := aSide.Find(".adPage__content__price-feature__labels__price-per-m__value").First().Attr("content")
 	apartment.PriceSquareMeterEur, _ = strconv.Atoi(strings.ReplaceAll(pricePerSqMeter, " ", ""))
 
-	//phoneHtml, _ := aSide.Find(".js-phone-number.adPage__content__phone").First().Html()
 	phoneLink := doc.Find(".js-phone-number.adPage__content__phone a").First()
-	//fmt.Println(phoneHtml)
 	phone, _ := phoneLink.Attr("href")
 	apartment.SellerPhone = phone[5:]
 
@@ -309,7 +331,7 @@ func saveApartment(db *sql.DB, apartment dto.Apartment) {
 	}
 }
 
-func getApartmentLinks(data []byte) ([]string, []string) {
+func parseFavoritesPage(data []byte) ([]string, []string, string) {
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(data))
 	if err != nil {
 		panic(err)
@@ -337,7 +359,7 @@ func getApartmentLinks(data []byte) ([]string, []string) {
 				panic("href not found")
 			}
 
-			fullUrl := addHostToUri(href)
+			fullUrl := parser.AddHostToUri(href)
 			if isAvailable == true {
 				links = append(links, fullUrl)
 			} else {
@@ -346,14 +368,10 @@ func getApartmentLinks(data []byte) ([]string, []string) {
 		}
 	})
 
-	return links, unavailableLinks
+	return links, unavailableLinks, parser.GetNextPageUrl(doc)
 }
 
-func addHostToUri(uri string) string {
-	return "https://999.md" + uri
-}
-
-func getPage(link string) ([]byte, error) {
+func getPageHtml(link string) ([]byte, error) {
 	httpClient := http.Client{}
 
 	urlObj, err := url.Parse(link)
@@ -569,7 +587,7 @@ func login(cookies []*http.Cookie) (string, error) {
 		panic(err)
 	}
 
-	fmt.Println(content)
+	log.Println(content)
 
 	return "asd", nil
 }

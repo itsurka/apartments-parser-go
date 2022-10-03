@@ -5,14 +5,16 @@ FROM golang:1.19-alpine as base
 RUN mkdir /app
 WORKDIR /app
 
-COPY ci/docker .
+# Copy app and packages
+COPY . .
+COPY docker/packages/ /usr/local/go/src/
 COPY .env .
 
 # Download all the dependencies
-RUN go get -d -v ./...
+RUN go get -d -v ./.
 
 # Install the package
-RUN go install -v ./...
+RUN go install -v ./.
 
 # Build the Go app
 RUN go build -o /build

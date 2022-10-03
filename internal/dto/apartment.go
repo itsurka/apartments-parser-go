@@ -1,6 +1,7 @@
 package dto
 
 type Apartment struct {
+	Id                  int
 	URL                 string
 	Title               string
 	Desc                string
@@ -14,4 +15,5 @@ type Apartment struct {
 	SellerLogin         string
 	SellerPhone         string
 	ImageUrls           []string
+	Available           bool
 }

@@ -3,6 +3,8 @@ package dbhelper
 import (
 	"database/sql"
 	"fmt"
+
+	_ "github.com/lib/pq"
 )
 
 type DbConfig struct {
