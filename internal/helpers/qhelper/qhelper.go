@@ -55,7 +55,7 @@ func (q *Queue) Consume(queueName string) <-chan amqp.Delivery {
 func (q *Queue) getQueue(queueName string) amqp.Queue {
 	amqpQueue, err := q.channel.QueueDeclare(
 		queueName,
-		false,
+		true,
 		false,
 		false,
 		false,

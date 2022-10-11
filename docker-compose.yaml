@@ -38,6 +38,7 @@ services:
       - ./pg_data:/var/lib/postgresql/data
   rabbitmq:
     image: rabbitmq:3.10-management-alpine
+    hostname: 'apartments-rabbitmq'
     container_name: 'apartments_rabbitmq'
     healthcheck:
       test: rabbitmq-diagnostics check_port_connectivity

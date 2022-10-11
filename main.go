@@ -92,23 +92,25 @@ func handleMessage(delivery amqp.Delivery) {
 		case "api.apartments.import":
 			importApartments()
 
-			getQueue().Publish("apartments.done", dto.QueueMessage{
+			responseMessage := dto.QueueMessage{
 				Version: "1",
 				Event:   "api.apartments.import.done",
-			})
+			}
+			getQueue().Publish("apartments.done", responseMessage)
 
-			log.Println("Published new message")
+			log.Println("Published new message", responseMessage)
 
 		case "api.apartments.import.test":
 
-			time.Sleep(10 * time.Second)
+			time.Sleep(2 * time.Second)
 
-			getQueue().Publish("apartments.done", dto.QueueMessage{
+			responseMessage := dto.QueueMessage{
 				Version: "1",
 				Event:   "api.apartments.test_import.done",
-			})
+			}
+			getQueue().Publish("apartments.done", responseMessage)
 
-			log.Println("Published new message")
+			log.Println("Published new message", responseMessage)
 
 		default:
 			log.Println("Unknown message event", message)
